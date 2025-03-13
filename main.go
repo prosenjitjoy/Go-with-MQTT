@@ -41,11 +41,40 @@ func main() {
 		Certificates: []tls.Certificate{cert},
 	}
 
+	authRules := &auth.Ledger{
+		// auth disallow all by default
+		Auth: auth.AuthRules{
+			{Username: "peach", Password: "password1", Allow: true},
+			{Username: "melon", Password: "password2", Allow: true},
+			{Remote: "127.0.0.1", Allow: true},
+			{Remote: "localhost", Allow: true},
+		},
+		// acl allows all by default
+		ACL: auth.ACLRules{
+			// // local superuser allow all
+			// {Remote: "127.0.0.1:*"},
+			// user melon can read and write to their own topic
+			{Username: "melon", Filters: auth.Filters{
+				"melon/#":   auth.ReadWrite,
+				"updates/#": auth.WriteOnly},
+			},
+			{
+				// otherwise, no clients have publishing permissions
+				Filters: auth.Filters{
+					"#":         auth.ReadOnly,
+					"updates/#": auth.Deny,
+				},
+			},
+		},
+	}
+
 	server := mqtt.New(&mqtt.Options{
 		InlineClient: true,
 	})
 
-	err = server.AddHook(new(auth.AllowHook), nil)
+	err = server.AddHook(new(auth.Hook), &auth.Options{
+		Ledger: authRules,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
