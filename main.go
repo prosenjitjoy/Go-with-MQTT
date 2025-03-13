@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	badgerdb "github.com/dgraph-io/badger/v4"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/hooks/storage/badger"
 	"github.com/mochi-mqtt/server/v2/listeners"
+	"github.com/mochi-mqtt/server/v2/packets"
 )
 
 func main() {
@@ -40,7 +42,10 @@ func main() {
 		Certificates: []tls.Certificate{cert},
 	}
 
-	server := mqtt.New(nil)
+	server := mqtt.New(&mqtt.Options{
+		InlineClient: true,
+	})
+
 	err = server.AddHook(new(auth.AllowHook), nil)
 	if err != nil {
 		log.Fatal(err)
@@ -121,6 +126,34 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+	}()
+
+	go func() {
+		server.Publish("direct/retained", []byte("retained message"), true, 0)
+		server.Publish("direct/alternate/retained", []byte("some other retained message"), true, 0)
+
+		callbackFn := func(cl *mqtt.Client, sub packets.Subscription, pk packets.Packet) {
+			server.Log.Info("inline client received message from subscription", "client", cl.ID, "subscriptionId", sub.Identifier, "topic", pk.TopicName, "payload", string(pk.Payload))
+		}
+
+		server.Subscribe("direct/#", 1, callbackFn)
+		server.Subscribe("direct/#", 2, callbackFn)
+	}()
+
+	go func() {
+		for range time.Tick(time.Second * 3) {
+			err := server.Publish("direct/publish", []byte("scheduled message"), false, 0)
+			if err != nil {
+				server.Log.Error("server.Publish", "error", err)
+			}
+			server.Log.Info("main.go issued direct message to direct/publish")
+		}
+	}()
+
+	go func() {
+		time.Sleep(time.Second * 10)
+		server.Log.Info("inline client unsubscribing")
+		server.Unsubscribe("direct/#", 1)
 	}()
 
 	<-done
